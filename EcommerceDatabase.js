@@ -596,4 +596,264 @@ db.createCollection("browsing_history", {
     }
   });
 
+
+
+  // Stored Procedures (JavaScript Functions)
+
+// Update Product Stock After Order**
+ 
+db.system.js.save({
+  _id: "updateProductStock",
+  value: function(orderId) {
+    const order = db.orders.findOne({ _id: orderId });
+    
+    order.items.forEach(item => {
+      if (item.variantId) {
+        db.products.update(
+          { _id: item.productId, "variants._id": item.variantId },
+          { $inc: { "variants.$.stock": -item.quantity } }
+        );
+      } else {
+        db.products.update(
+          { _id: item.productId },
+          { $inc: { stock: -item.quantity } }
+        );
+      }
+    });
+  }
+});
+
+//Calculate Product Rating**
+ 
+db.system.js.save({
+  _id: "calculateProductRating",
+  value: function(productId) {
+    const result = db.reviews.aggregate([
+      { $match: { productId: productId } },
+      { $group: { _id: null, avgRating: { $avg: "$rating" } } }
+    ]).toArray();
+    
+    const avgRating = result[0] ? result[0].avgRating : 0;
+    db.products.update(
+      { _id: productId },
+      { $set: { averageRating: avgRating.toFixed(1) } }
+    );
+  }
+});
+ 
+
+// Database Triggers (Using Change Streams)
+
+// Review Added Trigger**
+ 
+const reviewChangeStream = db.reviews.watch([
+  { $match: { operationType: "insert" } }
+]);
+
+reviewChangeStream.on("change", (change) => {
+  const productId = change.fullDocument.productId;
+  db.loadServerScripts();
+  calculateProductRating(productId);
+});
+ 
+
+// Order Status Update Trigger**
+ 
+const orderChangeStream = db.orders.watch([
+  { $match: { "updateDescription.updatedFields.status": { $exists: true } } }
+]);
+
+orderChangeStream.on("change", (change) => {
+  const order = change.fullDocument;
+  db.notifications.insertOne({
+    userId: order.userId,
+    type: "order",
+    message: `Order status updated to ${order.status}`,
+    createdAt: new Date()
+  });
+});
+ 
+// Scheduled Events (Using MongoDB Atlas Triggers or Cron Jobs)
+
+// Daily Sales Report**
+ 
+exports = function() {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  
+  const sales = db.orders.aggregate([
+    { $match: { createdAt: { $gte: yesterday } } },
+    { $group: { _id: null, total: { $sum: "$total" }, count: { $sum: 1 } } }
+  ]).toArray();
+  
+  // Send email or store report
+};
+```
+
+**b. Monthly Archive Old Orders**
+```javascript
+exports = function() {
+  const threeMonthsAgo = new Date();
+  threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+  
+  db.orders.aggregate([
+    { $match: { createdAt: { $lt: threeMonthsAgo } } },
+    { $out: "archived_orders" }
+  ]);
+  
+  db.orders.deleteMany({ createdAt: { $lt: threeMonthsAgo } });
+};
+ 
+
+// Database Views
+
+//Monthly Sales Report View**
+ 
+db.createView("monthly_sales", "orders", [
+  { $project: { 
+      month: { $month: "$createdAt" },
+      year: { $year: "$createdAt" },
+      total: 1 
+    } 
+  },
+  { $group: { 
+      _id: { year: "$year", month: "$month" }, 
+      totalSales: { $sum: "$total" },
+      orderCount: { $sum: 1 }
+    } 
+  }
+]);
+ 
+
+// Active Product Listings View**
+ 
+db.createView("active_products", "products", [
+  { $match: { isActive: true } },
+  { $lookup: {
+      from: "categories",
+      localField: "categoryId",
+      foreignField: "_id",
+      as: "category"
+    }
+  },
+  { $unwind: "$category" }
+]);
+ 
+
+// Backup Strategies
+// Regular Backup Procedure**
+ 
+ 
+//Weekly compressed backup
+mongodump --uri="mongodb://your-connection-string" --archive=/backup/weekly/backup.gz --gzip
+ 
+
+ 
+// Restoration Procedure**
+ 
+mongorestore --uri="mongodb://your-connection-string" --archive=/backup/latest.gz --gzip
+ 
+
+// Database Maintenance Events
+
+// Index Optimization**
+ 
+db.getCollectionNames().forEach((collection) => {
+  db[collection].reIndex();
+});
+ 
+
+//Data Validation Routine**
+ 
+const collections = ['users', 'products', 'orders'];
+collections.forEach(coll => {
+  const invalidDocs = db[coll].find({ $where: "this.__proto__ != null" });
+  // Handle invalid documents
+});
+ 
+
+// 7. Security Procedures
+
+// User Access Rotation**
+ 
+// Rotate API keys quarterly
+db.users.updateMany(
+  { role: "api_user" },
+  { $set: { apiKey: generateNewKey() } }
+);
+ 
+
+// Audit Log Cleanup**
+ 
+// Keep audit logs for 1 year
+db.audit_logs.deleteMany({
+  timestamp: { $lt: new Date(new Date().setFullYear(new Date().getFullYear() - 1)) }
+}); 
+
+ 
+// Point-in-Time Recovery**
+ 
+mongorestore --oplogReplay --oplogLimit=<timestamp> /backup/path
+ 
+
+// Monitoring Views
+
+//System Health Dashboard**
+ 
+db.createView("system_health", "system.profile", [
+  { $group: {
+      _id: "$op",
+      count: { $sum: 1 },
+      avgDuration: { $avg: "$millis" }
+    }
+  }
+]);
+ 
+
+// Data Archiving Strategy
+
+// Order Archiving Procedure**
+ 
+const archiveOldOrders = function() {
+  const archiveDate = new Date();
+  archiveDate.setFullYear(archiveDate.getFullYear() - 2);
+  
+  db.orders.aggregate([
+    { $match: { createdAt: { $lt: archiveDate } } },
+    { $merge: { into: "archived_orders" } }
+  ]);
+  
+  db.orders.deleteMany({ createdAt: { $lt: archiveDate } });
+};
+ 
+// Important Considerations:
+
+//Transaction Management**
+ 
+const session = db.getMongo().startSession();
+session.startTransaction();
+try {
+  // Multiple operations
+  session.commitTransaction();
+} catch (error) {
+  session.abortTransaction();
+}
+ 
+
+//Sharding Strategy** (For large datasets)
+ 
+sh.enableSharding("ecommerce");
+sh.shardCollection("ecommerce.products", { _id: "hashed" });
+ 
+ 
+//Change Streams for Real-time Updates**
+ 
+const changeStream = db.orders.watch(
+  [ { $match: { "operationType": "insert" } } ],
+  { fullDocument: "updateLookup" }
+);
+
+changeStream.on("change", (change) => {
+  // Handle real-time order notifications
+});
   
